@@ -213,14 +213,14 @@ local stripLeadingComments(s) =
 
     ['STRING_BLOCK', std.join('\n', [marker, string, endmarker])],
 
+  local symbols = ['{', '}', '[', ']', ',', '.', '(', ')', ';'],
   lexSymbol(str):
-    local symbols = ['{', '}', '[', ']', ',', '.', '(', ')', ';'];
     if std.member(symbols, str[0])
     then ['SYMBOL', str[0]]
     else [],
 
+  local ops = ['!', '$', ':', '~', '+', '-', '&', '|', '^', '=', '<', '>', '*', '/', '%'],
   lexOperator(str):
-    local ops = ['!', '$', ':', '~', '+', '-', '&', '|', '^', '=', '<', '>', '*', '/', '%'];
     local noEndSequence = ['+', '-', '~', '!', '$'];
     local infunc(s) =
       if s != '' && std.member(ops, s[0])
@@ -237,6 +237,8 @@ local stripLeadingComments(s) =
 
     if q == '$'
     then ['IDENTIFIER', q]
+    else if q != '|||' && std.endsWith(q, '|||')
+    then ['OPERATOR', q[:std.length(q) - 3]]
     else if q != ''
             && q != '|||'  // don't assert on this as it is handled by lexTextBlock
     then ['OPERATOR', q]
@@ -247,19 +249,32 @@ local stripLeadingComments(s) =
     if str == ''
     then []
     else
-      local lexicons = std.filter(
-        function(l) l != [], [
-          self.lexString(str),
-          self.lexIdentifier(str),
-          self.lexNumber(str),
-          self.lexSymbol(str),
-          self.lexOperator(str),
-        ]
-      );
-      //local value = std.trace(std.manifestJson(prev), lexicons)[0][1];
-      local value = lexicons[0][1];
-      assert std.length(lexicons) == 1 : 'Cannot lex: "%s"' % std.manifestJson(prev);
-      assert value != '' : 'Cannot lex: "%s"' % str;
+      local lexicon =
+        if std.any(
+          std.map(
+            function(c)
+              std.startsWith(str, c),
+            [
+              "'",
+              '"',
+              '@',
+              '|||\n',
+            ],
+          )
+        )
+        then self.lexString(str)
+        else if std.member(symbols, str[0])
+        then self.lexSymbol(str)
+        else if std.member(ops, str[0])
+        then self.lexOperator(str)
+        else if !xtd.ascii.isNumber(str[0])
+        then self.lexIdentifier(str)
+        else if xtd.ascii.isNumber(str[0])
+        then self.lexNumber(str)
+        else 'Cannot lex: "%s"' % str;
+
+      local value = lexicon[1];
+      assert value != '' : 'Cannot lex: "%s"' % lexicon;
 
       local countNewlines(s) = std.length(std.findSubstr('\n', s));
       local removedNewlinesCount = countNewlines(s) - countNewlines(str);
@@ -283,11 +298,11 @@ local stripLeadingComments(s) =
         then columnNr + std.length(value)
         else columnNr;
 
-      [lexicons[0] + [{ line: lineNr, column: columnNr }]]
-      + (
-        local remainder = str[std.length(lexicons[0][1]):];
-        if std.length(lexicons) > 0 && remainder != ''
-        then self.lex(remainder, endLineNr, endColumnNr, prev + lexicons)
-        else []
+      [lexicon + [{ line: lineNr, column: columnNr }]]
+      + self.lex(
+        str[std.length(lexicon[1]):],
+        endLineNr,
+        endColumnNr,
+        prev + [lexicon]
       ),
 }
