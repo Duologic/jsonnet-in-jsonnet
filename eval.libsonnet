@@ -9,6 +9,26 @@ local parser = import './parser.libsonnet';
 
   new(filename, file, imports={ imports: {}, importbins: {} }, extVars={}): {
     local root = self,
+    local parsedImports =
+      // only parse imports once, not for every import statement
+      std.foldl(
+        function(acc, k)
+          acc + {
+            local this = self,
+            [k]:
+              if std.isString(imports.imports[k])
+              then
+                evaluator.new(
+                  k,
+                  imports.imports[k],
+                  imports + { imports+: this }
+                ).eval()
+              else imports.imports[k],
+          },
+        std.objectFields(imports.imports),
+        {},
+      ),
+
     local expr =
       if std.isString(file)
       then
@@ -279,11 +299,7 @@ local parser = import './parser.libsonnet';
       ),
 
     evalIndexing(expr, env, locals):
-      local _indexable = root.evalExpr(expr.expr, env, locals);
-      local indexable =
-        if std.isString(_indexable)
-        then std.stringChars(_indexable)
-        else _indexable;
+      local indexable = root.evalExpr(expr.expr, env, locals);
       std.get(
         {
           '1': indexable[
@@ -548,12 +564,12 @@ local parser = import './parser.libsonnet';
           acc + (
             // named argument (has id)
             if std.length(findArg) == 1
-            then { [param.id]: evalExpr(findArg[0].expr, env, callLocals) }
+            then { [param.id]: evalExpr(findArg[0].expr, callEnv, callLocals) }
 
             // positional argument (no id)
             else if index < std.length(validArgs)
                     && !std.objectHas(validArgs[index], 'id')
-            then { [param.id]: evalExpr(validArgs[index].expr, env, callLocals) }
+            then { [param.id]: evalExpr(validArgs[index].expr, callEnv, callLocals) }
 
             // has a default value
             else if std.objectHas(param, 'default')
@@ -585,26 +601,21 @@ local parser = import './parser.libsonnet';
       ),
 
     local getImportFilename(path) =
-      local root =
-        if std.length(std.findSubstr('/', filename)) > 0
-        then std.splitLimitR(filename, '/', 1)[0] + '/'
-        else '';
-      local normalized =
-        if std.startsWith(path, './')
-        then path[2:]
-        else path;
+      local paths = import './paths.libsonnet';
+      local root = paths.dirname(filename);
+      paths.abspath(path, root),
 
-      if std.startsWith(path, '/')
-      then path
-      else root + normalized,
-
+    // FIXME: implement JPATH
+    local getFromJpath(imports, importFilename) =
+      std.get(
+        imports,
+        importFilename,
+        getFromJpath(imports, 'vendor/' + importFilename)
+      ),
 
     evalImportStatement(expr, env, locals):
       local importFilename = getImportFilename(expr.path);
-      local imp = imports.imports[importFilename];
-      if std.isString(imp)
-      then evaluator.new(importFilename, imp, imports).eval()
-      else imp,
+      getFromJpath(parsedImports, importFilename),
 
     evalImportStrStatement(expr, env, locals):
       local importFilename = getImportFilename(expr.path);
@@ -801,6 +812,6 @@ local parser = import './parser.libsonnet';
             evalExpr,
           );
 
-        root.evalExpr(fn.expr, env + callEnv, locals + args),
+        root.evalExpr(fn.expr, env, locals + args),
   },
 }
